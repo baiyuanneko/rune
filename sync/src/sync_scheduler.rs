@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::{println as info, println as error};
 
 use crate::core::{self, PrimaryKeyFromStr, RemoteDataSource, SyncContext, SyncTableMetadata};
-use crate::foreign_key::ForeignKeyResolver;
+use crate::foreign_key::{
+    ActiveModelWithForeignKeyOps, ForeignKeyResolver, ModelWithForeignKeyOps,
+};
 use crate::hlc::{HLCModel, HLCRecord};
 
 use sea_orm::{ActiveModelBehavior, EntityTrait, IntoActiveModel, PrimaryKeyTrait, Value};
@@ -61,8 +63,10 @@ impl<R: RemoteDataSource + Send + Sync + Debug + 'static> TableSyncJob<R> {
             + Serialize
             + for<'de> Deserialize<'de>
             + IntoActiveModel<E::ActiveModel>
+            + ModelWithForeignKeyOps
             + 'static,
-        E::ActiveModel: ActiveModelBehavior + Send + Sync + Debug + 'static,
+        E::ActiveModel:
+            ActiveModelBehavior + Send + Sync + Debug + ActiveModelWithForeignKeyOps + 'static,
         E::PrimaryKey: PrimaryKeyTrait
             + PrimaryKeyFromStr<<E::PrimaryKey as PrimaryKeyTrait>::ValueType>
             + 'static,
@@ -181,58 +185,14 @@ mod tests {
     use crate::chunking::ChunkingOptions;
     use crate::core::tests::test_entity;
     use crate::core::tests::MockRemoteDataSource;
+    use crate::core::tests::NoOpForeignKeyResolver;
     use crate::core::SyncDirection;
-    use crate::foreign_key::{DatabaseExecutor, FkPayload, ForeignKeyResolver};
     use crate::hlc::{SyncTaskContext, HLC};
 
     use anyhow::anyhow;
-    use sea_orm::{
-        ActiveModelBehavior, ConnectionTrait, Database, DbBackend, DbConn, EntityTrait, Schema,
-    };
-    use serde::Serialize;
+    use sea_orm::{ConnectionTrait, Database, DbBackend, DbConn, Schema};
     use std::sync::Arc;
     use uuid::Uuid;
-
-    #[derive(Debug)]
-    struct SchedulerTestFkResolver;
-    #[async_trait::async_trait]
-    impl ForeignKeyResolver for SchedulerTestFkResolver {
-        async fn extract_foreign_key_sync_ids<M, DB>(
-            &self,
-            _t: &str,
-            _m: &M,
-            _db: &DB,
-        ) -> Result<FkPayload>
-        where
-            M: HLCRecord + Send + Sync + Serialize,
-            DB: DatabaseExecutor + ConnectionTrait,
-        {
-            Ok(FkPayload::new())
-        }
-
-        fn extract_sync_ids_from_remote_model<M>(&self, _t: &str, _m: &M) -> Result<FkPayload>
-        where
-            M: HLCRecord + Send + Sync + Serialize,
-        {
-            Ok(FkPayload::new())
-        }
-
-        async fn remap_and_set_foreign_keys<AM, DB>(
-            &self,
-            _t: &str,
-            _a: &mut AM,
-            _p: &FkPayload,
-            _db: &DB,
-        ) -> Result<()>
-        where
-            AM: ActiveModelBehavior + Send,
-            AM::Entity: EntityTrait,
-            <AM::Entity as EntityTrait>::Column: sea_orm::ColumnTrait + sea_orm::Iterable,
-            DB: DatabaseExecutor + ConnectionTrait,
-        {
-            Ok(())
-        }
-    }
 
     async fn setup_scheduler_test_db() -> Result<DbConn> {
         let db = Database::connect("sqlite::memory:").await?;
@@ -294,10 +254,10 @@ mod tests {
         let initial_hlc = HLC::new(local_node_id);
         let table_name = "test_items".to_string();
 
-        let fk_resolver_arc = Arc::new(SchedulerTestFkResolver);
+        let fk_resolver_arc = Arc::new(NoOpForeignKeyResolver);
         let job = TableSyncJob::<MockRemoteDataSource>::new::<
             test_entity::Entity,
-            SchedulerTestFkResolver,
+            NoOpForeignKeyResolver,
         >(
             table_name.clone(),
             SyncTableMetadata {
@@ -335,10 +295,10 @@ mod tests {
         let initial_hlc = HLC::new(local_node_id);
         let table_name = "test_items_fail".to_string();
 
-        let fk_resolver_arc = Arc::new(SchedulerTestFkResolver);
+        let fk_resolver_arc = Arc::new(NoOpForeignKeyResolver);
         let job = TableSyncJob::<MockRemoteDataSource>::new::<
             test_entity::Entity,
-            SchedulerTestFkResolver,
+            NoOpForeignKeyResolver,
         >(
             table_name.clone(),
             SyncTableMetadata {
@@ -382,12 +342,12 @@ mod tests {
 
         let scheduler = SyncScheduler::new();
         let initial_hlc = HLC::new(local_node_id);
-        let fk_resolver_arc = Arc::new(SchedulerTestFkResolver);
+        let fk_resolver_arc = Arc::new(NoOpForeignKeyResolver);
 
         let table1_name = "table_ok".to_string();
         let job1 = TableSyncJob::<MockRemoteDataSource>::new::<
             test_entity::Entity,
-            SchedulerTestFkResolver,
+            NoOpForeignKeyResolver,
         >(
             table1_name.clone(),
             SyncTableMetadata {
@@ -422,7 +382,7 @@ mod tests {
         let table3_name = "table_ok_again".to_string();
         let job3 = TableSyncJob::<MockRemoteDataSource>::new::<
             test_entity::Entity,
-            SchedulerTestFkResolver,
+            NoOpForeignKeyResolver,
         >(
             table3_name.clone(),
             SyncTableMetadata {
